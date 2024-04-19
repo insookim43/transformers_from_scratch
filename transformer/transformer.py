@@ -79,30 +79,36 @@ class MultiheadAttention(nn.Module):
         return self.W_proj(attention)
 
 def clones(module, n=None):
-    """return modulelist of as identical structure of module that is given as input argument"""   
+    """return modulelist of as identical structure of module that is given as input argument"""
     # @TODO
     pass
+    
 
 
 class EncoderLayer(nn.Module):
     def __init__(self, n_heads=8, d_model=512):
         super().__init__()
         self.n_heads = n_heads
+        self.d_model = d_model
         assert self.d_model % self.n_heads == 0 
         d_k = self.d_model // self.n_heads
         self.multi_head_attention = MultiheadAttention(n_heads=n_heads, d_model=d_model, d_k=d_k, mask=None)
-        self.layernorm = nn.LayerNorm([d_k])
+        self.layernorm_at_attention_sublayer = nn.LayerNorm([d_k])
         self.feedforward = nn.Linear(in_features=d_model, out_features=d_model) # head information is mixed
-
-        # @TODO
-        pass
+        self.layernorm_at_ff_sublayer = nn.LayerNorm([d_k])
 
     def forward(self, X):
         # @TODO
         attention_by_heads = self.multi_head_attention(X)
         attention_concat = attention_by_heads.view(X.shape)
+        attention_plus_skip_connection = attention_concat + X
+        attention_sublayer_output = self.layernorm_at_attention_sublayer(attention_plus_skip_connection)
 
-        pass
+        ff_output = self.feedforward(attention_sublayer_output)
+        ff_plus_skip_connection = ff_output + attention_sublayer_output
+        ff_sublayer_output = self.layernorm_at_ff_sublayer(ff_plus_skip_connection)
+
+        return ff_sublayer_output
 
 class TransformerEncoder(nn.Module):
     def __init__(self, n_encoder_layers=6, n_heads=8):
@@ -148,7 +154,11 @@ class ProjectionLayer(nn.Module):
 class EncoderDecoderTransformer(nn.Module):
     def __init__(self):
         super().__init__()
+        self.encoder = TransformerEncoder()
+
         # @TODO
+        self.decoder = TransformerDecoder()
+        self.proj = ProjectionLayer()
         pass
 
     def forward(self, x):
