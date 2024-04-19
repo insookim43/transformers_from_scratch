@@ -1,12 +1,12 @@
 # import libraries
 import torch
 import torch.nn as nn
-import torch.utils.data.dataloader as Dataloader
-import torch.utils.data.dataset as Dataset
-import torch.optim.adam as Adam
-# @TODO
+from torch.utils.data import DataLoader
+from torch.utils.data import Dataset
+import torch.optim as optim 
 
 import numpy as np
+# @TODO
 
 # 변수 정의
 num_epochs = 2
@@ -16,32 +16,39 @@ lr = 0.00001
 
 
 # 데이터
-data = np.array([
+toy_data_raw = torch.Tensor(np.array([
     [[1, 2], [3, 4], [5, 6]],
     [[7, 8], [9, 10], [11, 12]],
     [[13, 14], [15, 16], [17, 18]],
-    [[19, 20], [21, 22], [23, 24]]])
+    [[19, 20], [21, 22], [23, 24]]]))
+toy_target_raw = torch.Tensor(np.array([
+    [[1, 2], [3, 4], [5, 6]],
+    [[7, 8], [9, 10], [11, 12]],
+    [[13, 14], [15, 16], [17, 18]],
+    [[19, 20], [21, 22], [23, 24]]]))
 
 class ToyDataset(Dataset):
-    def __init__(self, dat, tar):
-        super().__init__(dat, tar)
+    def __init__(self, x, y):
         # @TODO
+        pass
+
+    def __len__(self):
         pass
 
     def __getitem__(self, index):
         # @TODO
         pass
 
-
-train_dataloader = Dataloader(data, batch_size=batch_size)
+toy_sample = ToyDataset(toy_data_raw, toy_target_raw)
+train_dataloader = DataLoader(toy_sample, batch_size=batch_size)
 
 
 def apply_mask(attention_score, mask):
     # @TODO : mask
     return attention_score
 
-def dot_product_attention(Q, K, V, mask):
-    scale = K.ndim ** 0.5
+def scaled_dot_product_attention(Q, K, V, mask):
+    scale = K.shape[-1] ** 0.5
     attention_score = torch.softmax(torch.matmul(
         Q, K.permute([*torch.arange(Q.ndim)-2, -1, -2])), dim=-1)
     if mask is not None:
@@ -50,27 +57,26 @@ def dot_product_attention(Q, K, V, mask):
     out = torch.reciprocal(scale) * out
     return out
 
-class multi_head_attention(nn.Module):
-    def __init__(self, n_heads=8, d_model = 512, mask = None):
+class MultiheadAttention(nn.Module):
+    def __init__(self, n_heads=None, d_model=None, d_k=None, mask = None):
         super().__init__()
         self.d_model = d_model
         self.n_heads = n_heads
-        assert self.d_model % self.n_heads == 0 
-        d_k = self.d_model // self.n_heads
+
         self.mask = mask
 
         self.WQ = nn.Linear(in_features=d_model, out_features=d_model)
         self.WK = nn.Linear(in_features=d_model, out_features=d_model)
         self.WV = nn.Linear(in_features=d_model, out_features=d_model)
+
         self.W_proj = nn.Linear(in_features=d_k, out_features=d_k)
 
-    def forward(self, X, mask):
+    def forward(self, X):
         Q = self.WQ(X).view([*X.shape[:-1]+[self.n_heads, -1]])
         K = self.WK(X).view([*X.shape[:-1]+[self.n_heads, -1]])
         V = self.WV(X).view([*X.shape[:-1]+[self.n_heads, -1]])
-        attention = dot_product_attention(Q, K, V, mask)
-        out = attention.W_proj(attention).view(X.shape)
-        return out
+        attention = scaled_dot_product_attention(Q, K, V, self.mask)
+        return self.W_proj(attention)
 
 def clones(module, n=None):
     """return modulelist of as identical structure of module that is given as input argument"""   
@@ -79,14 +85,23 @@ def clones(module, n=None):
 
 
 class EncoderLayer(nn.Module):
-    def __init__(self, n_heads):
+    def __init__(self, n_heads=8, d_model=512):
         super().__init__()
         self.n_heads = n_heads
+        assert self.d_model % self.n_heads == 0 
+        d_k = self.d_model // self.n_heads
+        self.multi_head_attention = MultiheadAttention(n_heads=n_heads, d_model=d_model, d_k=d_k, mask=None)
+        self.layernorm = nn.LayerNorm([d_k])
+        self.feedforward = nn.Linear(in_features=d_model, out_features=d_model) # head information is mixed
+
         # @TODO
         pass
 
-    def forward(self, x):
+    def forward(self, X):
         # @TODO
+        attention_by_heads = self.multi_head_attention(X)
+        attention_concat = attention_by_heads.view(X.shape)
+
         pass
 
 class TransformerEncoder(nn.Module):
@@ -150,7 +165,7 @@ def make_model():
 model = make_model()
 
 # Optimizer
-optimizer = Adam(model.parameters(), lr=lr)
+optimizer = optim.Adam(model.parameters(), lr=lr)
 
 # lr Scheduler
 # loss criterion 정의
