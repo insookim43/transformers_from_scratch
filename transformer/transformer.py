@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
-import torch.optim as optim 
+import torch.optim as optim
 
 import numpy as np
 # @TODO
@@ -27,6 +27,7 @@ toy_target_raw = torch.Tensor(np.array([
     [[13, 14], [15, 16], [17, 18]],
     [[19, 20], [21, 22], [23, 24]]]))
 
+
 class ToyDataset(Dataset):
     def __init__(self, x, y):
         # @TODO
@@ -39,6 +40,7 @@ class ToyDataset(Dataset):
         # @TODO
         pass
 
+
 toy_sample = ToyDataset(toy_data_raw, toy_target_raw)
 train_dataloader = DataLoader(toy_sample, batch_size=batch_size)
 
@@ -46,6 +48,7 @@ train_dataloader = DataLoader(toy_sample, batch_size=batch_size)
 def apply_mask(attention_score, mask):
     # @TODO : mask
     return attention_score
+
 
 def scaled_dot_product_attention(Q, K, V, mask):
     scale = K.shape[-1] ** 0.5
@@ -57,13 +60,12 @@ def scaled_dot_product_attention(Q, K, V, mask):
     out = torch.reciprocal(scale) * out
     return out
 
+
 class MultiheadAttention(nn.Module):
-    def __init__(self, n_heads=None, d_model=None, d_k=None, mask = None):
+    def __init__(self, n_heads=None, d_model=None, d_k=None):
         super().__init__()
         self.d_model = d_model
         self.n_heads = n_heads
-
-        self.mask = mask
 
         self.WQ = nn.Linear(in_features=d_model, out_features=d_model)
         self.WK = nn.Linear(in_features=d_model, out_features=d_model)
@@ -71,85 +73,135 @@ class MultiheadAttention(nn.Module):
 
         self.W_proj = nn.Linear(in_features=d_k, out_features=d_k)
 
-    def forward(self, X):
-        Q = self.WQ(X).view([*X.shape[:-1]+[self.n_heads, -1]])
-        K = self.WK(X).view([*X.shape[:-1]+[self.n_heads, -1]])
-        V = self.WV(X).view([*X.shape[:-1]+[self.n_heads, -1]])
+    def forward(self, target, source, memory, mask=None):
+        if mask:
+            self.mask = mask
+        Q = self.WQ(target).view([*target.shape[:-1]+[self.n_heads, -1]])
+        K = self.WK(source).view([*source.shape[:-1]+[self.n_heads, -1]])
+        V = self.WV(memory).view([*memory.shape[:-1]+[self.n_heads, -1]])
         attention = scaled_dot_product_attention(Q, K, V, self.mask)
         return self.W_proj(attention)
 
-def clones(module, n=None):
-    """return modulelist of as identical structure of module that is given as input argument"""
-    # @TODO
-    pass
-    
 
+def clones(module, n=None):
+    """return modulelist of as identical structure of module instance given as input argument"""
+    return nn.ModuleList([module for _ in range(n)])
 
 class EncoderLayer(nn.Module):
     def __init__(self, n_heads=8, d_model=512):
         super().__init__()
         self.n_heads = n_heads
         self.d_model = d_model
-        assert self.d_model % self.n_heads == 0 
+        assert self.d_model % self.n_heads == 0
         d_k = self.d_model // self.n_heads
-        self.multi_head_attention = MultiheadAttention(n_heads=n_heads, d_model=d_model, d_k=d_k, mask=None)
-        self.layernorm_at_attention_sublayer = nn.LayerNorm([d_k])
-        self.feedforward = nn.Linear(in_features=d_model, out_features=d_model) # head information is mixed
-        self.layernorm_at_ff_sublayer = nn.LayerNorm([d_k])
+        self.multi_head_attention = MultiheadAttention(
+            n_heads=n_heads, d_model=d_model, d_k=d_k)
+        self.layernorm_at_attention_sublayer = nn.LayerNorm(d_model)
+        # head information is mixed
+        self.feedforward = nn.Linear(in_features=d_model, out_features=d_model)
+        self.layernorm_at_ff_sublayer = nn.LayerNorm(d_model)
 
     def forward(self, X):
-        # @TODO
-        attention_by_heads = self.multi_head_attention(X)
+        attention_by_heads = self.multi_head_attention(X, X, X, mask=None)
         attention_concat = attention_by_heads.view(X.shape)
         attention_plus_skip_connection = attention_concat + X
-        attention_sublayer_output = self.layernorm_at_attention_sublayer(attention_plus_skip_connection)
+        attention_sublayer_output = self.layernorm_at_attention_sublayer(
+            attention_plus_skip_connection)
 
         ff_output = self.feedforward(attention_sublayer_output)
         ff_plus_skip_connection = ff_output + attention_sublayer_output
-        ff_sublayer_output = self.layernorm_at_ff_sublayer(ff_plus_skip_connection)
+        ff_sublayer_output = self.layernorm_at_ff_sublayer(
+            ff_plus_skip_connection)
 
         return ff_sublayer_output
+
 
 class TransformerEncoder(nn.Module):
     def __init__(self, n_encoder_layers=6, n_heads=8):
         super().__init__()
         self.n_encoder_layers = n_encoder_layers
-        self.encoder_layers = clones(EncoderLayer(n_heads), n_encoder_layers)
-        
-    def forward(self, x):
+        self.encoder_layers = clones(EncoderLayer(n_heads), self.n_encoder_layers)
+
+    def forward(self, X):
         for i in range(self.n_encoder_layers):
-            x = self.encoder_layers[i](x)
-        return x
+            X = self.encoder_layers[i](X)
+        return X
+
 
 class DecoderLayer(nn.Module):
-    def __init__(self, n_heads):
+    def __init__(self, n_heads=8, d_model=512):
         super().__init__()
         self.n_heads = n_heads
-        # @TODO
-    def forward(self, x):
-        # @TODO
-        pass
+        self.d_model = d_model
+        assert self.d_model % self.n_heads == 0
+        d_k = self.d_model // self.n_heads
+        self.multi_head_attention = MultiheadAttention(
+            n_heads=n_heads,
+            d_model=d_model,
+            d_k=d_k)
+        self.layernorm_at_self_attention_sublayer = nn.LayerNorm(d_k)
+        self.cross_attention = MultiheadAttention(
+            n_heads=n_heads,
+            d_model=d_model,
+            d_k=d_k
+        )
+        self.layernorm_at_cross_attention_sublayer= nn.LayerNorm(d_model)
+        self.feedforward = nn.Linear(in_features=d_model, out_features=d_model)
+        self.layernorm_at_ff_sublayer = nn.LayerNorm(d_model)
+
+    def forward(self, X, source, memory, mask=None):
+        self_attention_by_heads = self.multi_head_attention(X, X, X, mask=mask)
+        self_attention_concat = self_attention_by_heads.view(X.shape)
+        self_attention_plus_skip_connection = self_attention_concat + X
+        self_attention_sublayer_output = self.layernorm_at_self_attention_sublayer(
+            self_attention_plus_skip_connection)
+        
+        cross_attention_by_heads = self.cross_attention(self_attention_sublayer_output, 
+                                                        source, 
+                                                        memory, 
+                                                        mask)
+        cross_attention_concat = cross_attention_by_heads.view(cross_attention_by_heads.shape)
+        cross_attention_plus_skip_connection = cross_attention_concat + self_attention_sublayer_output
+        cross_attention_sublayer_output = self.layernorm_at_cross_attention_sublayer(
+            cross_attention_plus_skip_connection) 
+        
+        ff_output = self.feedforward(cross_attention_sublayer_output)
+        ff_plus_skip_connection = ff_output + cross_attention_sublayer_output
+        ff_sublayer_output = self.layernorm_at_ff_sublayer(
+            ff_plus_skip_connection)
+        
+        return ff_sublayer_output
+
 
 class TransformerDecoder(nn.Module):
-    def __init__(self):
+    def __init__(self, n_decoder_layers=6, n_heads=8):
         super().__init__()
-        # @TODO
+        self.n_decoder_layers = n_decoder_layers
+        self.decoder_layers = clones(DecoderLayer(n_heads), self.n_decoder_layers)
+
+    def generate_mask(self, mask_size):
+        mask = torch.triu()
         pass
 
-    def forward(self, x):
-        # @TODO
-        pass
+    def forward(self, X, memory):
+        mask_size = X.shape
+        mask = self.generate_mask(mask_size)
+
+        for i in range(self.n_decoder_layers):
+            X = self.decoder_layers[i](X, memory, mask)
+        return X
 
 
 class ProjectionLayer(nn.Module):
-    def __init__(self):
+    def __init__(self, d_model):
         super().__init__()
-        # @TODO
-        pass
+        self.feedforward = nn.Linear(in_features=d_model, out_features=d_model)
+        self.softmax = torch.nn.Softmax(dim=-1)
 
-    def forward(self, x):
-        # @TODO
-        pass
+    def forward(self, X):
+        ff_out = self.feedforward(X)
+        return torch.nn.Softmax(ff_out)
+
 
 class EncoderDecoderTransformer(nn.Module):
     def __init__(self):
@@ -165,18 +217,20 @@ class EncoderDecoderTransformer(nn.Module):
         # @TODO
         pass
 
+
 def make_model():
     # @TODO
     model = EncoderDecoderTransformer()
-
+    print(model)
     return model
+
 
 # make model
 model = make_model()
 
 # Optimizer
 optimizer = optim.Adam(model.parameters(), lr=lr)
-
+scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1, end_factor=0.1)
 # lr Scheduler
 # loss criterion 정의
 # train 함수 정의
@@ -192,8 +246,9 @@ def train_epoch(model, dataloader, optimizer, scheduler):
     # Data encoding
     # @TODO
 
+
 for epoch in range(num_epochs):
-    train_epoch(model, train_dataloader, optimizer)
+    train_epoch(model, train_dataloader, optimizer, scheduler)
 
 # Attention 시각화
 # @TODO
