@@ -4,9 +4,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 import torch.optim as optim
-
 import numpy as np
-# @TODO
+
 
 # 변수 정의
 num_epochs = 2
@@ -16,29 +15,21 @@ lr = 0.00001
 
 
 # 데이터
-toy_data_raw = torch.Tensor(np.array([
-    [[1, 2], [3, 4], [5, 6]],
-    [[7, 8], [9, 10], [11, 12]],
-    [[13, 14], [15, 16], [17, 18]],
-    [[19, 20], [21, 22], [23, 24]]]))
-toy_target_raw = torch.Tensor(np.array([
-    [[1, 2], [3, 4], [5, 6]],
-    [[7, 8], [9, 10], [11, 12]],
-    [[13, 14], [15, 16], [17, 18]],
-    [[19, 20], [21, 22], [23, 24]]]))
+toy_data_raw = ["My favorite fruit is orange.", "No one likes orange."]
+toy_target_raw = ["제가 제일 좋아하는 과일은 오렌지입니다.", "오렌지를 좋아하는 사람은 없습니다."]
 
 
 class ToyDataset(Dataset):
     def __init__(self, x, y):
-        # @TODO
-        pass
+        self.x = x
+        self.y = y
+        # @TODO: 이미지 전처리
 
     def __len__(self):
-        pass
+        return len(self.x)
 
     def __getitem__(self, index):
-        # @TODO
-        pass
+        return self.x[index], self.y[index]
 
 
 toy_sample = ToyDataset(toy_data_raw, toy_target_raw)
@@ -201,47 +192,62 @@ class ProjectionLayer(nn.Module):
 
     def forward(self, X):
         ff_out = self.feedforward(X)
+        # @TODO
         return torch.nn.Softmax(ff_out)
 
 
 class EncoderDecoderTransformer(nn.Module):
     def __init__(self, d_model):
         super().__init__()
-        self.encoder = TransformerEncoder()
+        self.encoder = TransformerEncoder(n_encoder_layers=6, n_heads=8)
         self.d_model = d_model
-        self.decoder = TransformerDecoder()
+        self.decoder = TransformerDecoder(n_decoder_layers=6, n_heads=8)
         self.proj = ProjectionLayer(self.d_model)
-        # @TODO
-        pass
 
-    def forward(self, x):
-        # @TODO
-        pass
+    def forward(self, source, target):
+        encoder_out = self.encoder(source)
+        out = self.decoder(target, encoder_out)
+        out = self.proj(out)
+        pred = torch.argmax(out, dim=-1)
+
+        return pred
 
 
 def make_model():
-    # @TODO
     model = EncoderDecoderTransformer(d_model=512)
     print(model)
+    # init model param
     return model
-
 
 # make model
 model = make_model()
 
+# embedding
+def embedding(x):
+    # @ TODO
+    pass
+
+# encoding
+
+
 # Optimizer
 optimizer = optim.Adam(model.parameters(), lr=lr)
+optimizer.zero_grad()
 scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1, end_factor=0.1)
 # lr Scheduler
 # loss criterion 정의
+loss = torch.nn.BCELoss()
 # train 함수 정의
-model.to(device)
+# @TODO : device로 보내기
+#model.to(device)
 model.train()
-
+model.parameters
 
 def train_epoch(model, dataloader, optimizer, scheduler):
     # @TODO
-    pass
+    for sample, target in dataloader:
+        pred = model(sample, target)
+    print(pred)
     # Data embedding
     # @TODO
     # Data encoding
