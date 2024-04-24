@@ -46,8 +46,8 @@ train_dataloader = DataLoader(toy_sample, batch_size=batch_size)
 
 
 def apply_mask(attention_score, mask):
-    # @TODO : mask
-    return attention_score
+    masked_attention_score = attention_score + mask[None, None, ...] # b h s s
+    return masked_attention_score
 
 
 def scaled_dot_product_attention(Q, K, V, mask):
@@ -149,7 +149,7 @@ class DecoderLayer(nn.Module):
         self.feedforward = nn.Linear(in_features=d_model, out_features=d_model)
         self.layernorm_at_ff_sublayer = nn.LayerNorm(d_model)
 
-    def forward(self, X, source, memory, mask=None):
+    def forward(self, X, source, memory, mask):
         self_attention_by_heads = self.multi_head_attention(X, X, X, mask=mask)
         self_attention_concat = self_attention_by_heads.view(X.shape)
         self_attention_plus_skip_connection = self_attention_concat + X
@@ -159,7 +159,7 @@ class DecoderLayer(nn.Module):
         cross_attention_by_heads = self.cross_attention(self_attention_sublayer_output, 
                                                         source, 
                                                         memory, 
-                                                        mask)
+                                                        mask=None)
         cross_attention_concat = cross_attention_by_heads.view(cross_attention_by_heads.shape)
         cross_attention_plus_skip_connection = cross_attention_concat + self_attention_sublayer_output
         cross_attention_sublayer_output = self.layernorm_at_cross_attention_sublayer(
@@ -179,13 +179,14 @@ class TransformerDecoder(nn.Module):
         self.n_decoder_layers = n_decoder_layers
         self.decoder_layers = clones(DecoderLayer(n_heads), self.n_decoder_layers)
 
-    def generate_mask(self, mask_size):
-        mask = torch.triu()
-        pass
+    def generate_mask(self, seq_length):
+        mask = torch.triu(torch.ones((seq_length, seq_length), dtype=torch.float), diagonal=1)
+        mask = mask * (-1e+9)
+        return mask
 
     def forward(self, X, memory):
-        mask_size = X.shape
-        mask = self.generate_mask(mask_size)
+        seq_length = X.shape[1] # b "s" d_model
+        mask = self.generate_mask(seq_length)
 
         for i in range(self.n_decoder_layers):
             X = self.decoder_layers[i](X, memory, mask)
@@ -204,13 +205,13 @@ class ProjectionLayer(nn.Module):
 
 
 class EncoderDecoderTransformer(nn.Module):
-    def __init__(self):
+    def __init__(self, d_model):
         super().__init__()
         self.encoder = TransformerEncoder()
-
-        # @TODO
+        self.d_model = d_model
         self.decoder = TransformerDecoder()
-        self.proj = ProjectionLayer()
+        self.proj = ProjectionLayer(self.d_model)
+        # @TODO
         pass
 
     def forward(self, x):
@@ -220,7 +221,7 @@ class EncoderDecoderTransformer(nn.Module):
 
 def make_model():
     # @TODO
-    model = EncoderDecoderTransformer()
+    model = EncoderDecoderTransformer(d_model=512)
     print(model)
     return model
 
