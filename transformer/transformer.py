@@ -18,6 +18,14 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 lr = 0.00001
 # model parameters
 d_model = 512
+d_ff = 2048
+embedding_option = 'bert'
+if embedding_option == 'bert':
+    d_model = 768 # bert embedding is 768 dim
+embedding_option_all = ['scratch', 'bert']
+emb_size = 768
+dropout = 0.1
+maxlen = 512 # max seq length
 
 class ToyDataset(Dataset):
 
@@ -39,8 +47,8 @@ class TokenDataset(Dataset):
         y : batched raw tgt txt,
         self.x_encode : encoded objects of src 
         self.y_encode : encoded objects of tgt
-        src_tokenizer : tokenizers Tokenizer object
-        tgt_tokenizer : transformers tokenizer"""
+        src_tokenizer : transformers tokenizer encoding object
+        tgt_tokenizer : transformers tokenizer encoding object"""
         self.x = x
         self.y = y
         self.src_tokenizer = src_tokenizer
@@ -64,13 +72,14 @@ class TokenDataset(Dataset):
         self.x_ids = self.x_encode['input_ids']
         self.y_ids = self.y_encode['input_ids']
 
-        # self.x_ids_unsqueezed = self.x_ids.unsqueeze(-1)
-        # self.y_ids_unsqueezed = self.y_ids.unsqueeze(-1)
+        self.x_ids_unsqueezed = self.x_ids.unsqueeze(-1)
+        self.y_ids_unsqueezed = self.y_ids.unsqueeze(-1)
 
-        self.x_ids_embedded = embedding(self.x_ids)
-        self.y_ids_embedded = embedding(self.y_ids)
+        # self.x_ids_embedded = embedding(self.x_ids)
+        # self.y_ids_embedded = embedding(self.y_ids)
 
     def generate_tgt_mask(self, seq_length):
+        # @TODO: mask [PAD] token 
         mask = torch.triu(torch.ones((seq_length, seq_length),
                           dtype=torch.float), diagonal=1)
         return mask
@@ -78,14 +87,23 @@ class TokenDataset(Dataset):
     def __len__(self):
         return len(self.x)
 
+    # def __getitem__(self, idx):
+        
+    #     x_tokens = self.x_ids_embedded[idx].to(device)
+    #     y_tokens = self.y_ids_embedded[idx].to(device)
+    #     seq_length = y_tokens.shape[-2]
+    #     tgt_mask = self.generate_tgt_mask(seq_length=seq_length).to(device)
+
+    #     return x_tokens, y_tokens, tgt_mask
+
     def __getitem__(self, idx):
-        x_tokens = self.x_ids_embedded[idx].to(device)
-        y_tokens = self.y_ids_embedded[idx].to(device)
-        seq_length = y_tokens.shape[-2]
+        
+        x_id = self.x_ids_unsqueezed[idx].to(device)
+        y_id = self.y_ids_unsqueezed[idx].to(device)
+        seq_length = y_id.shape[-2]
         tgt_mask = self.generate_tgt_mask(seq_length=seq_length).to(device)
 
-        return x_tokens, y_tokens, tgt_mask
-
+        return x_id, y_id, tgt_mask
 
 
 class embedding(nn.Module):
@@ -98,19 +116,30 @@ class embedding(nn.Module):
 
 # encoding
 
+# @TODO : class로 wrap, 최종 output에 dropout, batch 입력에 대응 
+from torch import Tensor
+import math
+class PositionalEncoding(nn.Module):
+    def __init__(self,
+                 emb_size: int,
+                 dropout: float,
+                 maxlen: int = 5000):
+        super(PositionalEncoding, self).__init__()
+        den = torch.exp(- torch.arange(0, emb_size, 2)* math.log(10000) / emb_size) # 왜 exp 하지?
+        pos = torch.arange(0, maxlen).reshape(maxlen, 1)
+        pos_embedding = torch.zeros((maxlen, emb_size))
+        pos_embedding[:, 0::2] = torch.sin(pos * den)
+        pos_embedding[:, 1::2] = torch.cos(pos * den)
+        pos_embedding = pos_embedding.unsqueeze(-2)
 
-def positional_encoding(X):
-    encoding_init = np.zeros_like(X)
-    d_model = X.shape[-1]
-    for pos in range(X.shape[0]):
-        for i in range(d_model):
-            encoding_init[pos][i] = ((i+1) % 2)*np.sin(pos/10000**(2*i/d_model)) \
-                + (i % 2) * np.cos(pos/10000**(2*i/d_model))
+        self.dropout = nn.Dropout(dropout) # 왜 dropout 하지?!
+        self.register_buffer('pos_embedding', pos_embedding) # 이건 또 머야?
 
-    return torch.Tensor(encoding_init)
+    def forward(self, token_embedding: Tensor):
+        return self.dropout(token_embedding + self.pos_embedding)
 
 def apply_mask(orig, mask):
-    masked_orig = orig * mask  # b h s s # 앗 우상단만 1이 되네 확인 다시해야 함
+    masked_orig = orig.masked_fill(mask==1, 1e-9)
     return masked_orig
 
 
@@ -130,7 +159,7 @@ def clones(module, n=None):
 
 
 class MultiheadAttention(nn.Module):
-    def __init__(self, n_heads=None, d_model=None, d_k=None):
+    def __init__(self, n_heads=None, d_model=None):
         super().__init__()
         self.d_model = d_model
         self.n_heads = n_heads
@@ -141,8 +170,6 @@ class MultiheadAttention(nn.Module):
         self.W_proj = nn.Linear(in_features=d_model, out_features=d_model)
 
     def forward(self, target, source, memory, mask=None):
-        if mask is not None:
-            self.mask = mask
         batch_size = target.shape[0]
         d_k = self.d_model // self.n_heads
         Q = self.WQ(target).view([batch_size, self.n_heads, -1, d_k])
@@ -155,15 +182,14 @@ class MultiheadAttention(nn.Module):
 
 
 class EncoderLayer(nn.Module):
-    def __init__(self, n_heads=8, d_model=512, d_ff=512):
+    def __init__(self, n_heads=8, d_model=None, d_ff=None):
         super().__init__()
         self.n_heads = n_heads
         self.d_model = d_model
         assert self.d_model % self.n_heads == 0
-        d_k = self.d_model // self.n_heads
         self.d_ff = d_ff
         self.multi_head_attention = MultiheadAttention(
-            n_heads=n_heads, d_model=d_model, d_k=d_k)
+            n_heads=n_heads, d_model=d_model)
         self.layernorm_at_attention_sublayer = nn.LayerNorm(d_model)
         # head information is mixed
         self.feedforward = nn.Sequential(
@@ -187,11 +213,11 @@ class EncoderLayer(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, n_encoder_layers=6, n_heads=8):
+    def __init__(self, n_encoder_layers=6, n_heads=8, d_model=None, d_ff=None):
         super().__init__()
         self.n_encoder_layers = n_encoder_layers
         self.encoder_layers = clones(
-            EncoderLayer(n_heads), self.n_encoder_layers)
+            EncoderLayer(n_heads=n_heads, d_model=d_model, d_ff=d_ff), self.n_encoder_layers)
 
     def forward(self, X):
         for i in range(self.n_encoder_layers):
@@ -200,24 +226,24 @@ class TransformerEncoder(nn.Module):
 
 
 class DecoderLayer(nn.Module):
-    def __init__(self, n_heads=8, d_model=512):
+    def __init__(self, n_heads=8, d_model=None, d_ff=None):
         super().__init__()
         self.n_heads = n_heads
+        self.d_ff = d_ff
         self.d_model = d_model
         assert self.d_model % self.n_heads == 0
-        d_k = self.d_model // self.n_heads
         self.multi_head_attention = MultiheadAttention(
             n_heads=n_heads,
-            d_model=d_model,
-            d_k=d_k)
+            d_model=d_model)
         self.layernorm_at_self_attention_sublayer = nn.LayerNorm(d_model)
         self.cross_attention = MultiheadAttention(
             n_heads=n_heads,
-            d_model=d_model,
-            d_k=d_k
+            d_model=d_model
         )
         self.layernorm_at_cross_attention_sublayer = nn.LayerNorm(d_model)
-        self.feedforward = nn.Linear(in_features=d_model, out_features=d_model)
+        self.feedforward = nn.Sequential(
+            nn.Linear(in_features=d_model, out_features=self.d_ff),
+            nn.Linear(in_features=self.d_ff, out_features=d_model))
         self.layernorm_at_ff_sublayer = nn.LayerNorm(d_model)
 
     def forward(self, X, source, memory, mask):
@@ -232,7 +258,7 @@ class DecoderLayer(nn.Module):
                                                         memory,
                                                         mask=None)
         cross_attention_concat = cross_attention_by_heads.view(
-            cross_attention_by_heads.shape)
+            X.shape)
         cross_attention_plus_skip_connection = cross_attention_concat + \
             self_attention_sublayer_output
         cross_attention_sublayer_output = self.layernorm_at_cross_attention_sublayer(
@@ -247,14 +273,13 @@ class DecoderLayer(nn.Module):
 
 
 class TransformerDecoder(nn.Module):
-    def __init__(self, n_decoder_layers=6, n_heads=8):
+    def __init__(self, n_decoder_layers=6, n_heads=8, d_model=None):
         super().__init__()
         self.n_decoder_layers = n_decoder_layers
         self.decoder_layers = clones(
-            DecoderLayer(n_heads), self.n_decoder_layers)
+            DecoderLayer(n_heads=n_heads, d_model=d_model, d_ff=d_ff), self.n_decoder_layers)
 
     def forward(self, X, memory, tgt_mask):
-        seq_length = X.shape[1]  # b "s" d_model
 
         for i in range(self.n_decoder_layers):
             X = self.decoder_layers[i](X, memory, memory, tgt_mask)
@@ -274,22 +299,34 @@ class ProjectionLayer(nn.Module):
 
 
 class EncoderDecoderTransformer(nn.Module):
-    def __init__(self, d_model, d_vocab):
+    def __init__(self, d_model, d_vocab, d_ff, src_vocab_size, tgt_vocab_size, emb_size, dropout, maxlen):
         super().__init__()
-        self.encoder = TransformerEncoder(n_encoder_layers=6, n_heads=8)
+        self.encoder = TransformerEncoder(n_encoder_layers=6, n_heads=8, d_model=d_model, d_ff=d_ff)
         self.d_model = d_model
-        self.decoder = TransformerDecoder(n_decoder_layers=6, n_heads=8)
+        self.decoder = TransformerDecoder(n_decoder_layers=6, n_heads=8, d_model=d_model)
         self.proj = ProjectionLayer(self.d_model, d_vocab)
+        self.src_tok_emb = embedding(src_vocab_size, emb_size)
+        self.tgt_tok_emb = embedding(tgt_vocab_size, emb_size)
+        self.positional_encoding = PositionalEncoding(emb_size, dropout, maxlen)
 
     def forward(self, source, target, tgt_mask):
-        encoder_out = self.encoder(source)
-        out = self.decoder(target, encoder_out, tgt_mask)
+        src_emb = self.positional_encoding(self.src_tok_emb(source))
+        tgt_emb = self.positional_encoding(self.tgt_tok_emb(target))
+        encoder_out = self.encoder(src_emb)
+        out = self.decoder(tgt_emb, encoder_out, tgt_mask)
         logit = self.proj(out)        
         return F.log_softmax(logit, dim=-1)
 
 
-def make_model():
-    model = EncoderDecoderTransformer(d_model=512, d_vocab=10000)
+def make_model(d_model, d_vocab, d_ff, src_vocab_size, tgt_vocab_size, emb_size, dropout, maxlen):
+    model = EncoderDecoderTransformer(d_model=d_model, 
+                                      d_vocab=d_vocab,
+                                      d_ff=d_ff,
+                                      src_vocab_size=src_vocab_size, 
+                                      tgt_vocab_size=tgt_vocab_size, 
+                                      emb_size=emb_size,
+                                      dropout=dropout,
+                                      maxlen=maxlen)
     print(model)
 
     # init model param
@@ -299,9 +336,6 @@ def make_model():
 
     return model
 
-
-
-print(positional_encoding(torch.zeros([3, 6])))
 
 
 # 데이터
@@ -337,7 +371,13 @@ print("print ids of toy src & tgt")
 print([encoded for encoded in toy_data['input_ids']])
 print([encoded for encoded in toy_target['input_ids']])
 
-embedding_layer = embedding(len(src_tokenizer), d_model=d_model) # src tokenizer 
+if embedding_option in embedding_option_all:
+    if embedding_option == 'scratch':
+        embedding_layer = embedding(len(src_tokenizer), d_model=d_model) # src tokenizer
+    elif embedding_option == 'bert':
+        model = BertModel.from_pretrained("bert-base-uncased") # embedding dim : 768
+        embedding_layer = model.embeddings.word_embeddings
+
 toy_train_dataset = TokenDataset(toy_data_raw,
                              toy_target_raw,
                              src_tokenizer,
@@ -350,7 +390,14 @@ print(next(iter(train_dataloader)))
 
 
 # make model
-model = make_model()
+model = make_model(d_model=d_model, 
+                   d_vocab=len(tgt_tokenizer), 
+                   d_ff=d_ff, 
+                   src_vocab_size=len(src_tokenizer), 
+                   tgt_vocab_size=len(tgt_tokenizer), 
+                   emb_size=emb_size, 
+                   dropout=dropout,
+                   maxlen=maxlen)
 
 # Optimizer
 optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -407,7 +454,7 @@ def train_epoch(model, train_dataloader, optimizer, loss_fn, scheduler):
         optimizer.zero_grad()
         logits = model(src, tgt, tgt_mask)
         print("logits", logits)
-        loss = loss_fn(logits, tgt)
+        loss = loss_fn(logits, tgt) # @TODO : label smoothing tgt
         loss.backward()
 
         optimizer.step()
@@ -426,7 +473,7 @@ def evaluate(model, val_dataloader, loss_fn):
         src = src.to(device)
         tgt = tgt.to(device)
 
-        # logits = model(src, tgt)
+        logits = model(src, tgt)
 
         # loss = loss_fn
         # losses += loss.item()
