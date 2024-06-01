@@ -1,3 +1,9 @@
+# references
+# https://pytorch.org/tutorials/beginner/translation_transformer.html
+# and Annotated transformer 
+# https://colab.research.google.com/github/metamath1/ml-simple-works/blob/master/transformer/annotated_transformer.ipynb
+
+
 # import libraries
 from transformers import BertTokenizer, BertModel
 from transformers import PreTrainedTokenizerFast
@@ -54,6 +60,8 @@ class TokenDataset(Dataset):
         self.src_tokenizer = src_tokenizer
         self.tgt_tokenizer = tgt_tokenizer
         
+        # @TODO: dynamic padding을 하기 위해 data item별로 padding하는 것으로 전환
+        # 아예 tokenizer를 배치아이템별로 encode하는 게 나은지 검토
         self.x_encode = self.src_tokenizer(
             self.x,
             return_tensors='pt',     # 텐서로 반환
@@ -98,6 +106,7 @@ class TokenDataset(Dataset):
 
     def __getitem__(self, idx):
         
+        # @TODO: data collator 
         x_id = self.x_ids_unsqueezed[idx].to(device)
         y_id = self.y_ids_unsqueezed[idx].to(device)
         seq_length = y_id.shape[-2]
@@ -356,10 +365,13 @@ toy_target_raw = ["제가 제일 좋아하는 과일은 오렌지입니다.",
 src_tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 tgt_tokenizer = PreTrainedTokenizerFast.from_pretrained("/app/transformer/embedding/BPE-nsmc.model")
 
-# len of embedding 
-print("len of src_tokenizer: ",  len(src_tokenizer))
+# len of tokenizer
+print("len of src_tokenizer: ", len(src_tokenizer))
 print("len of tgt_tokenizer: ", len(tgt_tokenizer))
 
+# @TODO: pre-tokenizing
+
+# tokenizing
 toy_data = src_tokenizer(toy_data_raw)
 toy_target = tgt_tokenizer(toy_target_raw)
 
@@ -371,6 +383,7 @@ print("print ids of toy src & tgt")
 print([encoded for encoded in toy_data['input_ids']])
 print([encoded for encoded in toy_target['input_ids']])
 
+# embedding
 if embedding_option in embedding_option_all:
     if embedding_option == 'scratch':
         embedding_layer = embedding(len(src_tokenizer), d_model=d_model) # src tokenizer
@@ -378,6 +391,7 @@ if embedding_option in embedding_option_all:
         model = BertModel.from_pretrained("bert-base-uncased") # embedding dim : 768
         embedding_layer = model.embeddings.word_embeddings
 
+# Dataset
 toy_train_dataset = TokenDataset(toy_data_raw,
                              toy_target_raw,
                              src_tokenizer,
