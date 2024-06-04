@@ -48,13 +48,15 @@ class ToyDataset(Dataset):
 
 class TokenDataset(Dataset):
 
-    def __init__(self, x, y, src_tokenizer, tgt_tokenizer, embedding):
-        """x : batched raw src txt, 
-        y : batched raw tgt txt,
-        self.x_encode : encoded objects of src 
-        self.y_encode : encoded objects of tgt
-        src_tokenizer : transformers tokenizer encoding object
-        tgt_tokenizer : transformers tokenizer encoding object"""
+    def __init__(self, x, y, src_tokenizer, tgt_tokenizer):
+        """
+            x : batched raw src txt, 
+            y : batched raw tgt txt,
+            self.x_encode : encoded objects of src 
+            self.y_encode : encoded objects of tgt
+            src_tokenizer : transformers tokenizer encoding object
+            tgt_tokenizer : transformers tokenizer encoding object
+        """
         self.x = x
         self.y = y
         self.src_tokenizer = src_tokenizer
@@ -62,6 +64,7 @@ class TokenDataset(Dataset):
         
         # @TODO: dynamic padding을 하기 위해 data item별로 padding하는 것으로 전환
         # 아예 tokenizer를 배치아이템별로 encode하는 게 나은지 검토
+        # https://huggingface.co/docs/transformers/v4.41.3/en/main_classes/tokenizer#transformers.PreTrainedTokenizer
         self.x_encode = self.src_tokenizer(
             self.x,
             return_tensors='pt',     # 텐서로 반환
