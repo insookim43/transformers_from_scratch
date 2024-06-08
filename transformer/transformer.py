@@ -69,7 +69,7 @@ class TokenDataset(Dataset):
             self.x,
             return_tensors='pt',     # 텐서로 반환
             truncation=False,         # 잘라내기 적용
-            padding='max_length',    # 패딩 적용
+            padding='max_length',    # 패딩 적용 없음
             add_special_tokens=True  # 스페셜 토큰 적용
 )
 
@@ -77,23 +77,21 @@ class TokenDataset(Dataset):
             self.y,                 
             return_tensors='pt',     # 텐서로 반환
             truncation=False,         # 잘라내기 적용
-            padding='max_length',    # 패딩 적용
+            padding='max_length',    # 패딩 적용 없음
             add_special_tokens=True  # 스페셜 토큰 적용
         )
-        self.x_ids = self.x_encode['input_ids']
-        self.y_ids = self.y_encode['input_ids']
+        self.x_token_ids = self.x_encode['input_ids']
+        self.y_token_ids = self.y_encode['input_ids']
 
-        self.x_ids_unsqueezed = self.x_ids.unsqueeze(-1)
-        self.y_ids_unsqueezed = self.y_ids.unsqueeze(-1)
+        print(self.x_token_ids.shape)
+        print(self.y_token_ids.shape)
+        # self.x_ids_unsqueezed = self.x_token_ids.unsqueeze(-1)
+        # self.y_ids_unsqueezed = self.y_token_ids.unsqueeze(-1)
 
         # self.x_ids_embedded = embedding(self.x_ids)
         # self.y_ids_embedded = embedding(self.y_ids)
 
-    def generate_tgt_mask(self, seq_length):
-        # @TODO: mask [PAD] token 
-        mask = torch.triu(torch.ones((seq_length, seq_length),
-                          dtype=torch.float), diagonal=1)
-        return mask
+
 
     def __len__(self):
         return len(self.x)
@@ -109,13 +107,38 @@ class TokenDataset(Dataset):
 
     def __getitem__(self, idx):
         
-        # @TODO: data collator 
-        x_id = self.x_ids_unsqueezed[idx].to(device)
-        y_id = self.y_ids_unsqueezed[idx].to(device)
-        seq_length = y_id.shape[-2]
+        # @TODO: data collator에서 device로 보내기
+        # x_id = self.x_token_ids_unsqueezed[idx].to(device)
+        # y_id = self.y_token_ids_unsqueezed[idx].to(device)
+
+        seq_length = self.x_token_ids.shape[-2]
         tgt_mask = self.generate_tgt_mask(seq_length=seq_length).to(device)
 
-        return x_id, y_id, tgt_mask
+        return self.x_token_ids[idx], self.y_token_ids[idx], tgt_mask
+
+def generate_tgt_mask(seq_length):
+    # @TODO: mask [PAD] token 
+    mask = torch.triu(torch.ones((seq_length, seq_length),
+                        dtype=torch.float), diagonal=1)
+    return mask
+def pad_sequence(sequence):
+    padded_sequence = 
+    return padded_sequence
+# collate_func
+def collate_func(batch):
+    """batch : list of [x_toekn_ids, y_token_ids, tgt_mask]"""
+    pad_token_id = $tokenizer.pad_token_id$ #  hardcoded
+    start_token_id = $tokenizer.start_token_id$ # hardcoded
+    end_token_id = $tokenizer.end_token_id$ # hardcoded
+    max_length = max([item[0] for item in batch])
+    y_token_ids = [start_token_id +item[1] + end_token_id for item in batch]
+    x_token_ids = pad_sequence(x_token_ids)
+    tgt_mask = generate_tgt_mask(seq_length=max_length).to(device)
+    x_token_ids = torch.concatenate([x_token_ids]).to(device)
+    y_token_ids = torch.concatenate([y_token_ids]).to(device)
+    tgt_mask = torch.concatenate([tgt_mask]).to(device)
+
+    return [x_token_ids, y_token_ids, tgt_mask]
 
 
 class embedding(nn.Module):
@@ -321,24 +344,52 @@ class EncoderDecoderTransformer(nn.Module):
         self.tgt_tok_emb = embedding(tgt_vocab_size, emb_size)
         self.positional_encoding = PositionalEncoding(emb_size, dropout, maxlen)
 
-    def forward(self, source, target, tgt_mask):
-        src_emb = self.positional_encoding(self.src_tok_emb(source))
-        tgt_emb = self.positional_encoding(self.tgt_tok_emb(target))
+    def forward(self, src_emb, tgt_emb, tgt_mask):
         encoder_out = self.encoder(src_emb)
         out = self.decoder(tgt_emb, encoder_out, tgt_mask)
         logit = self.proj(out)        
-        return F.log_softmax(logit, dim=-1)
+        return logit
+    
+class TransformerSeqtoSeqModel(nn.Module):
+    def __init__(self, d_model, d_vocab, d_ff, src_vocab_size, tgt_vocab_size, emb_size, dropout, maxlen, embedding_option):
+        super().__init__()
+        self.Transformer = EncoderDecoderTransformer(d_model, 
+                                                     d_vocab, 
+                                                     d_ff, 
+                                                     src_vocab_size, 
+                                                     tgt_vocab_size, 
+                                                     emb_size, 
+                                                     dropout, 
+                                                     maxlen)
+        # embedding
+        if embedding_option in embedding_option_all:
+            if embedding_option == 'scratch':
+                embedding_layer = embedding(len(src_tokenizer), d_model=d_model) # src tokenizer
+            elif embedding_option == 'bert':
+                model = BertModel.from_pretrained("bert-base-uncased") # embedding dim : 768
+                embedding_layer = model.embeddings.word_embeddings
+
+        self.embedding = embedding(src_vocab_size, emb_size)
+        self.positional_encoding = PositionalEncoding(emb_size, dropout, maxlen)
+    def forward(self, source, target, tgt_mask):
+        src_emb = self.positional_encoding(self.embedding(source))
+        tgt_emb = self.positional_encoding(self.embedding(target))
+        logit = self.Transformer(src_emb, tgt_emb, tgt_mask)
+
+        return logit
 
 
-def make_model(d_model, d_vocab, d_ff, src_vocab_size, tgt_vocab_size, emb_size, dropout, maxlen):
-    model = EncoderDecoderTransformer(d_model=d_model, 
+
+def make_model(d_model, d_vocab, d_ff, src_vocab_size, tgt_vocab_size, emb_size, dropout, maxlen, embedding_option):
+    model = TransformerSeqtoSeqModel(d_model=d_model, 
                                       d_vocab=d_vocab,
                                       d_ff=d_ff,
                                       src_vocab_size=src_vocab_size, 
                                       tgt_vocab_size=tgt_vocab_size, 
                                       emb_size=emb_size,
                                       dropout=dropout,
-                                      maxlen=maxlen)
+                                      maxlen=maxlen,
+                                      embedding_option=embedding_option)
     print(model)
 
     # init model param
@@ -386,22 +437,14 @@ print("print ids of toy src & tgt")
 print([encoded for encoded in toy_data['input_ids']])
 print([encoded for encoded in toy_target['input_ids']])
 
-# embedding
-if embedding_option in embedding_option_all:
-    if embedding_option == 'scratch':
-        embedding_layer = embedding(len(src_tokenizer), d_model=d_model) # src tokenizer
-    elif embedding_option == 'bert':
-        model = BertModel.from_pretrained("bert-base-uncased") # embedding dim : 768
-        embedding_layer = model.embeddings.word_embeddings
 
 # Dataset
 toy_train_dataset = TokenDataset(toy_data_raw,
                              toy_target_raw,
                              src_tokenizer,
-                             tgt_tokenizer,
-                             embedding_layer)
+                             tgt_tokenizer)
 
-train_dataloader = DataLoader(toy_train_dataset, batch_size=batch_size)
+train_dataloader = DataLoader(toy_train_dataset, batch_size=batch_size, collate_fn=collate_func)
 print("first encoded ids in dataloader")
 print(next(iter(train_dataloader)))
 
@@ -414,7 +457,8 @@ model = make_model(d_model=d_model,
                    tgt_vocab_size=len(tgt_tokenizer), 
                    emb_size=emb_size, 
                    dropout=dropout,
-                   maxlen=maxlen)
+                   maxlen=maxlen,
+                   embedding_option='scratch')
 
 # Optimizer
 optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -465,8 +509,6 @@ def train_epoch(model, train_dataloader, optimizer, loss_fn, scheduler):
     model.train()
     losses = 0
     for src, tgt, tgt_mask in train_dataloader:
-        src = src.to(device)
-        tgt = tgt.to(device)
 
         optimizer.zero_grad()
         logits = model(src, tgt, tgt_mask)
